@@ -46,5 +46,5 @@ list of english words, the algorithm will optimally group the anagrams with O(n)
 The student also follows a neat indention style.
 
 PS: I assume that under formal circumstances a code reviewer may not edit the code for the student 
-to avoid issues of plagiarism, however for the sake of reflecting my skillset for the applucation
+to avoid issues of plagiarism, however for the sake of reflecting my skillset for the application
 I have attached a corrected anagram.py file giving correct output.
