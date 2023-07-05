@@ -1,0 +1,164 @@
+CREATE EXTERNAL TABLE tbl_customers ( 
+    customer string,
+    purchase_details ARRAY<
+        struct<
+             timestamp: string,
+             region: string,
+             products: ARRAY< struct<
+                       name: string,
+                       price: int,
+                       payment_method: string>>,
+             sales_staff: struct<
+                       cashier: string,
+                       manager: string>>>,
+    technicians_available ARRAY<
+        struct<technician: string,
+             shift_start: string>>
+)
+ROW FORMAT SERDE 'org.openx.data.jsonserde.JsonSerDe'
+WITH SERDEPROPERTIES (
+  'serialization.format' = '9',
+  'separatorChar' = '\n'
+)
+LOCATION 's3://round3-bucket/'
+
+
+
+CREATE EXTERNAL TABLE tbl_customers_map (
+    json_data string,
+    purchase_details 
+    MAP<STRING, STRING>,
+    technicians_available
+    MAP<STRING, STRING>
+)
+
+LOCATION 's3://round3-bucket/';
+
+
+--Flattened Data
+WITH dataset AS (
+  SELECT
+    CAST(json_extract_scalar(tbl_customers_map.json_data, '$.customer') AS JSON) AS customer,
+    CAST(json_extract(tbl_customers_map.json_data, '$.purchase_details') AS JSON) AS purchase_details,
+    CAST(json_extract(tbl_customers_map.json_data, '$.technicians_available') AS JSON) AS technicians_available
+  FROM
+    tbl_customers_map
+)
+SELECT
+  customer,
+  json_extract_scalar(purchase_details, '$.timestamp') AS timestamp,
+  json_extract_scalar(purchase_details, '$.region') AS region,
+  json_extract(purchase_details, '$.products') AS products, --array
+  json_extract_scalar(purchase_details, '$.sales_staff.cashier') AS cashier,
+  json_extract_scalar(purchase_details, '$.sales_staff.manager') AS manager,
+  technicians_available
+FROM
+  dataset;
+
+
+
+
+
+--Spelling correction Attempt. "Failed:NOT_SUPPORTED: Modifying Hive table
+--rows is only supported for transactional tables".
+UPDATE tbl_customers_map
+SET json_data = REGEXP_REPLACE(json_data, '"region":"Hoedjes Bay"', '"region":"Hoedjies Bay"')
+WHERE json_data LIKE '%"region":"Hoedjes Bay"%';
+-- Solution: Corrected spelling mistake in json file externally using python
+
+
+
+--QUESTION 1
+WITH dataset AS (
+  SELECT
+    CAST(json_extract_scalar(tbl_customers_map.json_data, '$.customer') AS JSON) AS customer,
+    CAST(json_extract(tbl_customers_map.json_data, '$.purchase_details') AS JSON) AS purchase_details
+  FROM
+    tbl_customers_map
+)
+SELECT
+  customer,
+  json_extract_scalar(purchase_details, '$.region') AS region,
+  json_extract_scalar(json_array_get(json_extract(purchase_details, '$.products'), 6), '$.price') AS product_price_7th_item,
+  json_extract_scalar(json_array_get(json_extract(purchase_details, '$.products'), 8), '$.payment_method') AS payment_method_9th_item
+FROM
+  dataset
+WHERE
+  json_extract_scalar(purchase_details, '$.region') = 'Hoedjies Bay';
+
+
+
+--QUESTION 2
+WITH dataset AS (
+  SELECT
+    json_extract_scalar(tbl_customers_map.json_data, '$.customer') AS customer,
+    json_extract(tbl_customers_map.json_data, '$.purchase_details.products') AS products
+  FROM
+    tbl_customers_map
+)
+SELECT
+  customer,
+  SUM(CAST(json_extract_scalar(phone, '$.price') AS INT)) AS total_spent_on_phones
+FROM (
+  SELECT
+    customer,
+    CAST(products AS ARRAY(JSON)) AS phone_list
+  FROM
+    dataset
+    ) AS subquery
+CROSS JOIN UNNEST(subquery.phone_list) AS t(phone)
+WHERE
+  json_extract_scalar(phone, '$.name') LIKE '%Phone%'
+GROUP BY
+  customer;
+
+
+
+
+--QUESTION 3
+WITH dataset AS (
+  SELECT
+    CAST(json_extract(tbl_customers_map.json_data, '$.purchase_details') AS JSON) AS purchase_details,
+    CAST(json_extract(tbl_customers_map.json_data, '$.technicians_available') AS JSON) AS technicians_available
+  FROM
+    tbl_customers_map
+)
+
+SELECT
+  json_extract_scalar(purchase_details, '$.region') AS region,
+  --json_extract_scalar(technicians_available, '$[0].technician') AS first_shift_technician,
+  json_extract_scalar(
+    element_at(
+      CAST(technicians_available AS ARRAY(JSON)),
+      cardinality(CAST(technicians_available AS ARRAY(JSON)))
+    ),
+    '$.technician'
+  ) AS last_shift_technician
+FROM
+  dataset
+WHERE
+  json_extract_scalar(purchase_details, '$.region') = 'Hoedjies Bay';
+
+
+
+
+--QUESTION 4
+WITH dataset AS (
+  SELECT
+    CAST(json_extract(tbl_customers_map.json_data, '$.purchase_details') AS JSON) AS purchase_details
+  FROM
+    tbl_customers_map
+)
+SELECT
+  from_iso8601_timestamp(json_extract_scalar(purchase_details, '$.timestamp')) AS timestamp,
+  cardinality(CAST(json_extract(purchase_details, '$.products') AS ARRAY(JSON))) AS products__before_2008,
+  CASE 
+    WHEN from_iso8601_timestamp(json_extract_scalar(purchase_details, '$.timestamp')) < from_iso8601_timestamp('2005-01-01T00:00:00.000Z') THEN 'old_data'
+    ELSE 'new_data'
+--grouping is a reserved keyword
+  END AS grouping_col 
+FROM
+  dataset
+WHERE
+  from_iso8601_timestamp(json_extract_scalar(purchase_details, '$.timestamp')) < from_iso8601_timestamp('2008-01-01T00:00:00.000Z');
+ 
